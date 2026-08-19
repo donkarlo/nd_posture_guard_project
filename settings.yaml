@@ -1,0 +1,37 @@
+app:
+  title: "ND Posture Guard"
+  warning_text: "صاف بشین"
+
+camera:
+  device: "auto"
+  width: 640
+  height: 480
+  fps: 30
+  mirror: true
+
+vision:
+  detection_interval_ms: 100
+
+  # Each of the six manually clicked shoulder anchors is tracked directly.
+  # The tracker never adds new arbitrary feature points from the face/background.
+  shoulder_anchor_template_size_px: 25
+  shoulder_anchor_search_radius_px: 42
+  shoulder_anchor_minimum_match_confidence: 0.45
+
+  # Tracking is accepted with at least 4/6 anchors, with at least 2 on each shoulder.
+  shoulder_anchor_minimum_valid_anchors: 4
+
+  # Reject one anchor if its motion disagrees strongly with the other anchors
+  # on the same shoulder.
+  shoulder_anchor_maximum_group_motion_residual_px: 16.0
+
+monitoring:
+  shoulder_drop_trigger_percent: 7.0
+  shoulder_width_trigger_percent: 12.0
+  shoulder_tilt_trigger_degrees: 12.0
+  required_bad_frames: 5
+  alert_cooldown_seconds: 3.0
+
+alerts:
+  sound_path: "assets/one_long_beep.wav"
+  volume_percent: 100
