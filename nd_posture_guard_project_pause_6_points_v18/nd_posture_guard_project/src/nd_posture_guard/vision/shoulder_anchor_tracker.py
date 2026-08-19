@@ -16,28 +16,49 @@ class ShoulderAnchorTracker:
         minimum_match_confidence: float,
         minimum_valid_anchors: int,
         maximum_group_motion_residual_px: float,
+        recovery_search_radius_px: int = 190,
+        optical_flow_window_px: int = 41,
+        optical_flow_pyramid_levels: int = 4,
+        optical_flow_forward_backward_error_px: float = 4.0,
     ) -> None:
         size = max(15, int(template_size_px))
         self._template_size = size if size % 2 == 1 else size + 1
-        self._search_radius = max(12, int(search_radius_px))
-        self._recovery_search_radius = max(96, self._search_radius * 3)
-        self._minimum_match_confidence = max(0.05, min(float(minimum_match_confidence), 0.99))
-        self._recovery_match_confidence = max(0.30, self._minimum_match_confidence * 0.78)
-        self._minimum_valid_anchors = max(4, min(int(minimum_valid_anchors), 6))
-        self._maximum_group_motion_residual = max(3.0, float(maximum_group_motion_residual_px))
+        self._search_radius = max(18, int(search_radius_px))
+        self._recovery_search_radius = max(
+            int(recovery_search_radius_px), self._search_radius * 4
+        )
+        flow_window = max(21, int(optical_flow_window_px))
+        self._flow_window = flow_window if flow_window % 2 == 1 else flow_window + 1
+        self._flow_levels = max(2, int(optical_flow_pyramid_levels))
+        self._flow_fb_error = max(1.0, float(optical_flow_forward_backward_error_px))
+        self._minimum_match_confidence = max(
+            0.05, min(float(minimum_match_confidence), 0.99)
+        )
+        self._recovery_match_confidence = max(
+            0.25, self._minimum_match_confidence * 0.72
+        )
+        self._minimum_valid_anchors = max(4, int(minimum_valid_anchors))
+        self._maximum_group_motion_residual = max(
+            4.0, float(maximum_group_motion_residual_px)
+        )
         self._calibration_poses: list[ShoulderCalibrationPose] = []
         self._calibration_anchor_sets: list[NDArray[np.float32]] = []
-        self._templates: list[list[NDArray[np.uint8]]] = [[] for _ in range(6)]
+        self._templates: list[list[NDArray[np.uint8]]] = []
         self._anchors: NDArray[np.float32] | None = None
+        self._previous_gray: NDArray[np.uint8] | None = None
+        self._anchors_per_shoulder = 0
         self._confidence = 0.0
         self._valid_anchor_count = 0
         self._lost_frames = 0
 
     @property
     def ready(self) -> bool:
+        total = self._total_anchors
         return (
             len(self._calibration_poses) >= 3
+            and total >= 4
             and self._anchors is not None
+            and len(self._templates) == total
             and all(len(anchor_templates) >= 3 for anchor_templates in self._templates)
         )
 
@@ -49,11 +70,31 @@ class ShoulderAnchorTracker:
     def valid_anchor_count(self) -> int:
         return self._valid_anchor_count
 
+    @property
+    def total_anchor_count(self) -> int:
+        return self._total_anchors
+
+    @property
+    def _total_anchors(self) -> int:
+        return self._anchors_per_shoulder * 2
+
     def clear(self) -> None:
         self._calibration_poses.clear()
         self._calibration_anchor_sets.clear()
-        self._templates = [[] for _ in range(6)]
+        self._templates = []
         self._anchors = None
+        self._previous_gray = None
+        self._anchors_per_shoulder = 0
+        self._confidence = 0.0
+        self._valid_anchor_count = 0
+        self._lost_frames = 0
+
+
+    def prepare_for_reacquire(self) -> None:
+        """Keep calibration but discard frame-to-frame tracking state."""
+        self._previous_gray = None
+        if self._calibration_anchor_sets:
+            self._anchors = self._calibration_anchor_sets[0].copy()
         self._confidence = 0.0
         self._valid_anchor_count = 0
         self._lost_frames = 0
@@ -63,6 +104,12 @@ class ShoulderAnchorTracker:
         frame: NDArray[np.uint8],
         pose: ShoulderCalibrationPose,
     ) -> None:
+        if self._anchors_per_shoulder == 0:
+            self._anchors_per_shoulder = pose.points_per_shoulder
+            self._templates = [[] for _ in range(self._total_anchors)]
+        elif pose.points_per_shoulder != self._anchors_per_shoulder:
+            raise ValueError("Every calibration pose must use the same number of shoulder points.")
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         pose_templates: list[NDArray[np.uint8]] = []
         for index, point in enumerate(pose.all_points):
@@ -72,10 +119,10 @@ class ShoulderAnchorTracker:
                     f"Shoulder anchor {index + 1} is too close to the image edge. "
                     "Move slightly farther from the camera and calibrate again."
                 )
-            if float(np.std(patch)) < 3.0:
+            if float(np.std(patch)) < 2.0:
                 raise ValueError(
                     f"Shoulder anchor {index + 1} has too little visible texture/contrast. "
-                    "Place the point on the visible shoulder/clothing boundary and calibrate again."
+                    "Place it on the visible shoulder edge, seam, or textured clothing and calibrate again."
                 )
             pose_templates.append(patch)
 
@@ -85,16 +132,14 @@ class ShoulderAnchorTracker:
         for index, patch in enumerate(pose_templates):
             self._templates[index].append(patch)
 
-        # While calibration is being collected, keep the most recent pose. Once all
-        # three poses exist, seed normal monitoring from CENTER. If the user is still
-        # turned LEFT/RIGHT, the recovery pass can immediately reacquire that pose.
-        if len(self._calibration_anchor_sets) >= 3:
-            self._anchors = self._calibration_anchor_sets[0].copy()
-        else:
-            self._anchors = anchor_set.copy()
-
+        self._anchors = (
+            self._calibration_anchor_sets[0].copy()
+            if len(self._calibration_anchor_sets) >= 3
+            else anchor_set.copy()
+        )
+        self._previous_gray = None
         self._confidence = 1.0 if self.ready else 0.0
-        self._valid_anchor_count = 6 if self.ready else 0
+        self._valid_anchor_count = self._total_anchors if self.ready else 0
         self._lost_frames = 0
 
     def track(self, frame: NDArray[np.uint8]) -> TrackedShoulders | None:
@@ -106,30 +151,81 @@ class ShoulderAnchorTracker:
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        normal = self._track_from_seed(
-            gray,
-            self._anchors,
-            self._search_radius,
-            self._minimum_match_confidence,
-        )
-        if normal is not None:
-            self._lost_frames = 0
-            return self._accept(normal)
+        if self._previous_gray is not None:
+            flowed = self._track_with_optical_flow(self._previous_gray, gray)
+            if flowed is not None:
+                self._lost_frames = 0
+                return self._accept(flowed, gray)
 
-        # A fast head/body movement can move all six shoulder patches outside the
-        # normal local search window. Previously that left the tracker permanently at
-        # 0/6. Recovery searches from every calibrated CENTER/LEFT/RIGHT anchor set
-        # using a wider window, then accepts only a geometrically plausible shoulder
-        # configuration.
         recovered = self._recover(gray)
         if recovered is not None:
             self._lost_frames = 0
-            return self._accept(recovered)
+            return self._accept(recovered, gray)
 
         self._lost_frames += 1
         self._confidence = 0.0
         self._valid_anchor_count = 0
+        self._previous_gray = None
         return None
+
+    def _track_with_optical_flow(
+        self,
+        previous_gray: NDArray[np.uint8],
+        gray: NDArray[np.uint8],
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_], NDArray[np.float32]] | None:
+        assert self._anchors is not None
+        old_points = self._anchors.reshape(-1, 1, 2).astype(np.float32)
+        criteria = (
+            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+            30,
+            0.01,
+        )
+        new_points, forward_status, _ = cv2.calcOpticalFlowPyrLK(
+            previous_gray,
+            gray,
+            old_points,
+            None,
+            winSize=(self._flow_window, self._flow_window),
+            maxLevel=self._flow_levels,
+            criteria=criteria,
+        )
+        if new_points is None or forward_status is None:
+            return None
+        back_points, backward_status, _ = cv2.calcOpticalFlowPyrLK(
+            gray,
+            previous_gray,
+            new_points,
+            None,
+            winSize=(self._flow_window, self._flow_window),
+            maxLevel=self._flow_levels,
+            criteria=criteria,
+        )
+        if back_points is None or backward_status is None:
+            return None
+
+        candidates = new_points.reshape(-1, 2).astype(np.float32)
+        back = back_points.reshape(-1, 2).astype(np.float32)
+        old = old_points.reshape(-1, 2)
+        fb_error = np.linalg.norm(back - old, axis=1)
+        raw_valid = (
+            forward_status.reshape(-1).astype(bool)
+            & backward_status.reshape(-1).astype(bool)
+            & np.isfinite(candidates).all(axis=1)
+            & (fb_error <= self._flow_fb_error)
+        )
+        raw_valid &= self._points_inside_frame(candidates, gray.shape[1], gray.shape[0])
+        valid = self._reject_group_motion_outliers(old, candidates, raw_valid)
+        if not self._enough_valid(valid):
+            return None
+
+        updated = self._fill_missing_with_group_motion(old, candidates, valid)
+        shoulders = self._shoulders_from_anchors(updated, valid)
+        if not self._geometry_is_plausible(updated, shoulders):
+            return None
+
+        scores = np.zeros(self._total_anchors, dtype=np.float32)
+        scores[valid] = np.clip(1.0 - fb_error[valid] / self._flow_fb_error, 0.0, 1.0)
+        return updated, valid, scores
 
     def _recover(
         self,
@@ -153,7 +249,9 @@ class ShoulderAnchorTracker:
                 continue
             anchors, valid, scores = candidate
             accepted_scores = scores[valid]
-            quality = float(np.mean(accepted_scores)) * (float(np.count_nonzero(valid)) / 6.0)
+            quality = float(np.mean(accepted_scores)) * (
+                float(np.count_nonzero(valid)) / max(self._total_anchors, 1)
+            )
             if quality > best_quality:
                 best_quality = quality
                 best = (anchors, valid, scores)
@@ -166,11 +264,12 @@ class ShoulderAnchorTracker:
         search_radius: int,
         confidence_threshold: float,
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_], NDArray[np.float32]] | None:
+        total = self._total_anchors
         candidates = seed_anchors.copy()
-        scores = np.zeros(6, dtype=np.float32)
-        raw_valid = np.zeros(6, dtype=bool)
+        scores = np.zeros(total, dtype=np.float32)
+        raw_valid = np.zeros(total, dtype=bool)
 
-        for index in range(6):
+        for index in range(total):
             matched = self._match_anchor(
                 gray,
                 seed_anchors[index],
@@ -185,10 +284,7 @@ class ShoulderAnchorTracker:
             raw_valid[index] = score >= confidence_threshold
 
         valid = self._reject_group_motion_outliers(seed_anchors, candidates, raw_valid)
-        valid_count = int(np.count_nonzero(valid))
-        left_count = int(np.count_nonzero(valid[:3]))
-        right_count = int(np.count_nonzero(valid[3:]))
-        if valid_count < self._minimum_valid_anchors or left_count < 2 or right_count < 2:
+        if not self._enough_valid(valid):
             return None
 
         updated = self._fill_missing_with_group_motion(seed_anchors, candidates, valid)
@@ -200,15 +296,33 @@ class ShoulderAnchorTracker:
     def _accept(
         self,
         result: tuple[NDArray[np.float32], NDArray[np.bool_], NDArray[np.float32]],
+        gray: NDArray[np.uint8],
     ) -> TrackedShoulders:
         anchors, valid, scores = result
         self._anchors = anchors
+        self._previous_gray = gray.copy()
         valid_count = int(np.count_nonzero(valid))
         self._valid_anchor_count = valid_count
         accepted_scores = scores[valid]
         mean_score = float(np.mean(accepted_scores)) if len(accepted_scores) else 0.0
-        self._confidence = min(1.0, mean_score * (valid_count / 6.0))
+        self._confidence = min(
+            1.0,
+            max(0.0, mean_score) * (valid_count / max(self._total_anchors, 1)),
+        )
         return self._shoulders_from_anchors(anchors, valid)
+
+    def _enough_valid(self, valid: NDArray[np.bool_]) -> bool:
+        side = self._anchors_per_shoulder
+        valid_count = int(np.count_nonzero(valid))
+        left_count = int(np.count_nonzero(valid[:side]))
+        right_count = int(np.count_nonzero(valid[side:]))
+        required_total = min(max(self._minimum_valid_anchors, 4), self._total_anchors)
+        required_side = 2 if side <= 3 else 2
+        return (
+            valid_count >= required_total
+            and left_count >= required_side
+            and right_count >= required_side
+        )
 
     def _fill_missing_with_group_motion(
         self,
@@ -217,13 +331,16 @@ class ShoulderAnchorTracker:
         valid: NDArray[np.bool_],
     ) -> NDArray[np.float32]:
         updated = candidates.copy()
-        for start, end in ((0, 3), (3, 6)):
+        side = self._anchors_per_shoulder
+        for start, end in ((0, side), (side, side * 2)):
             side_valid = valid[start:end]
+            if not np.any(side_valid):
+                continue
             side_delta = np.median(
                 candidates[start:end][side_valid] - seed_anchors[start:end][side_valid],
                 axis=0,
             ).astype(np.float32)
-            for local_index in range(3):
+            for local_index in range(side):
                 absolute_index = start + local_index
                 if not valid[absolute_index]:
                     updated[absolute_index] = seed_anchors[absolute_index] + side_delta
@@ -285,15 +402,19 @@ class ShoulderAnchorTracker:
         raw_valid: NDArray[np.bool_],
     ) -> NDArray[np.bool_]:
         valid = raw_valid.copy()
-        for start, end in ((0, 3), (3, 6)):
+        side = self._anchors_per_shoulder
+        for start, end in ((0, side), (side, side * 2)):
             indices = np.flatnonzero(valid[start:end]) + start
-            if len(indices) < 2:
+            if len(indices) < 3:
                 continue
             deltas = candidates[indices] - old_anchors[indices]
             median = np.median(deltas, axis=0)
             residuals = np.linalg.norm(deltas - median, axis=1)
+            dynamic_limit = self._maximum_group_motion_residual + max(
+                0.0, float(np.linalg.norm(median)) * 0.18
+            )
             for index, residual in zip(indices, residuals):
-                if float(residual) > self._maximum_group_motion_residual:
+                if float(residual) > dynamic_limit:
                     valid[index] = False
         return valid
 
@@ -308,29 +429,46 @@ class ShoulderAnchorTracker:
         median_width = float(np.median(calibration_widths))
         if shoulders.left[0] >= shoulders.right[0]:
             return False
-        if shoulders.width < median_width * 0.55 or shoulders.width > median_width * 1.50:
+        if shoulders.width < median_width * 0.42 or shoulders.width > median_width * 1.75:
             return False
-        if abs(shoulders.left[1] - shoulders.right[1]) > shoulders.width * 0.50:
+        if abs(shoulders.left[1] - shoulders.right[1]) > shoulders.width * 0.72:
             return False
 
-        left = anchors[:3]
-        right = anchors[3:]
-        if not (left[0, 0] > left[1, 0] > left[2, 0]):
+        side = self._anchors_per_shoulder
+        left = anchors[:side]
+        right = anchors[side:]
+        left_progress = np.diff(left[:, 0])
+        right_progress = np.diff(right[:, 0])
+        if np.count_nonzero(left_progress < 0) < max(1, side - 2):
             return False
-        if not (right[0, 0] < right[1, 0] < right[2, 0]):
+        if np.count_nonzero(right_progress > 0) < max(1, side - 2):
             return False
         return True
 
-    @staticmethod
     def _shoulders_from_anchors(
+        self,
         anchors: NDArray[np.float32],
         valid: NDArray[np.bool_],
     ) -> TrackedShoulders:
-        left = np.mean(anchors[:3], axis=0)
-        right = np.mean(anchors[3:6], axis=0)
+        side = self._anchors_per_shoulder
+        left = np.mean(anchors[:side], axis=0)
+        right = np.mean(anchors[side : side * 2], axis=0)
         return TrackedShoulders(
             left=(float(left[0]), float(left[1])),
             right=(float(right[0]), float(right[1])),
             anchors=tuple((float(point[0]), float(point[1])) for point in anchors),
             valid_anchors=tuple(bool(value) for value in valid),
+        )
+
+    @staticmethod
+    def _points_inside_frame(
+        points: NDArray[np.float32],
+        width: int,
+        height: int,
+    ) -> NDArray[np.bool_]:
+        return (
+            (points[:, 0] >= 0)
+            & (points[:, 0] < width)
+            & (points[:, 1] >= 0)
+            & (points[:, 1] < height)
         )

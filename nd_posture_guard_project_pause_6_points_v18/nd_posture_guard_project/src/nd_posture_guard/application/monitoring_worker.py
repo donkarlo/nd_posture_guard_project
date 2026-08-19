@@ -25,11 +25,12 @@ class MonitoringWorker(QThread):
     camera_started = Signal(str)
     calibration_started = Signal(int)
     calibration_progress = Signal(int, int, str)
-    calibration_points_required = Signal(str)
+    calibration_points_required = Signal(str, int)
     calibration_action_required = Signal(str)
     calibration_completed = Signal()
     calibration_failed = Signal(str)
     calibration_cleared = Signal()
+    monitoring_paused_changed = Signal(bool)
 
     def __init__(
         self,
@@ -54,6 +55,7 @@ class MonitoringWorker(QThread):
         self._frozen_frame: NDArray[np.uint8] | None = None
         self._snapshot_requested = False
         self._calibration_message = "Not calibrated"
+        self._monitoring_paused = False
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -67,8 +69,15 @@ class MonitoringWorker(QThread):
     def request_clear_reference(self) -> None:
         self._commands.put(("clear_reference", None))
 
+    def request_monitoring_paused(self, paused: bool) -> None:
+        self._commands.put(("monitoring_paused", bool(paused)))
+
     def request_shoulder_drop_percent(self, value: float) -> None:
-        self._commands.put(("shoulder_drop", float(value)))
+        value = float(value)
+        # Persist immediately so the last UI tolerance survives even if the user
+        # closes the app right after changing it.
+        self._settings_repository.save_shoulder_drop_trigger_percent(value)
+        self._commands.put(("shoulder_drop", value))
 
     def run(self) -> None:
         try:
@@ -107,9 +116,27 @@ class MonitoringWorker(QThread):
                 self.status_changed.emit("Calibration cleared. Sit straight and press Calibrate shoulders.")
             elif command == "shoulder_drop" and isinstance(value, float):
                 self._posture_evaluator.set_shoulder_drop_trigger_percent(value)
-                self._settings_repository.save_shoulder_drop_trigger_percent(value)
+                self.status_changed.emit(
+                    f"Shoulder-drop tolerance saved for the next run: {value:.1f}%."
+                )
+            elif command == "monitoring_paused" and isinstance(value, bool):
+                self._monitoring_paused = value
+                self._shoulder_tracker.prepare_for_reacquire()
+                self.monitoring_paused_changed.emit(value)
+                if value:
+                    self.status_changed.emit(
+                        "Monitoring paused. Camera preview stays active, but posture evaluation and beeps are disabled."
+                    )
+                else:
+                    self.status_changed.emit(
+                        "Monitoring resumed. Reacquiring the calibrated shoulder anchors."
+                    )
 
     def _handle_calibrate_command(self) -> None:
+        if self._monitoring_paused:
+            self._monitoring_paused = False
+            self._shoulder_tracker.prepare_for_reacquire()
+            self.monitoring_paused_changed.emit(False)
         if self._calibration_session.active:
             if self._calibration_session.waiting_for_turn:
                 if self._calibration_session.continue_after_turn():
@@ -143,7 +170,7 @@ class MonitoringWorker(QThread):
         self.calibration_started.emit(target)
         self.calibration_progress.emit(0, target, self._calibration_message)
         self.status_changed.emit(
-            "Calibration started. Head position is ignored. You will mark 6 shoulder-line points in each of 3 straight poses (18 total)."
+            "Calibration started. Head position is ignored. You will mark 6 shoulder-line points in each of 3 straight poses (18 total): 3 on each shoulder."
         )
 
     def _handle_calibration_point(self, value: tuple[float, float]) -> None:
@@ -236,7 +263,9 @@ class MonitoringWorker(QThread):
             stage = self._calibration_session.stage_name
             message = self._calibration_session.next_point_message
             self._calibration_message = message
-            self.calibration_points_required.emit(message)
+            self.calibration_points_required.emit(
+                message, self._calibration_session.points_per_pose
+            )
             self.calibration_progress.emit(
                 self._calibration_session.point_count,
                 self._calibration_session.target_points,
@@ -247,13 +276,14 @@ class MonitoringWorker(QThread):
         shoulders = None
         evaluation = self._empty_evaluation()
         if not self._calibration_session.active and self._posture_evaluator.calibrated:
-            shoulders = self._shoulder_tracker.track(live_frame)
-            evaluation = self._posture_evaluator.evaluate(
-                shoulders,
-                live_frame.shape[1],
-                live_frame.shape[0],
-            )
-            self._handle_evaluation(evaluation)
+            if not self._monitoring_paused:
+                shoulders = self._shoulder_tracker.track(live_frame)
+                evaluation = self._posture_evaluator.evaluate(
+                    shoulders,
+                    live_frame.shape[1],
+                    live_frame.shape[0],
+                )
+                self._handle_evaluation(evaluation)
         elif not self._calibration_session.active:
             self.status_changed.emit(
                 "Not calibrated. Press Calibrate shoulders. No face, head, or pose model is used."
@@ -279,13 +309,14 @@ class MonitoringWorker(QThread):
                 calibration_current=self._calibration_session.point_count if calibration_active else 0,
                 calibration_target=self._calibration_session.target_points,
                 calibration_message=self._calibration_message,
+                monitoring_paused=self._monitoring_paused,
             )
         )
 
     def _handle_evaluation(self, evaluation: PostureEvaluation) -> None:
         if evaluation.state == PostureEvaluator.STATE_POSE_LOST:
             self.status_changed.emit(
-                "Shoulder anchor tracking is incomplete. No warning will be generated until at least four anchors (two per shoulder) are valid again."
+                "Shoulder tracking is recovering. The 6 manually marked anchors are followed with pyramidal optical flow; if they are lost, the app continuously searches all three calibrated views to reacquire them."
             )
             return
         if evaluation.state == PostureEvaluator.STATE_SLOUCH:

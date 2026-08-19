@@ -23,13 +23,15 @@ class MainWindow(QMainWindow):
     calibration_point_selected = Signal(float, float)
     clear_reference_requested = Signal()
     shoulder_drop_changed = Signal(float)
-    test_alert_requested = Signal()
+    monitoring_pause_requested = Signal(bool)
     closing = Signal()
 
     def __init__(self, title: str, shoulder_drop_percent: float) -> None:
         super().__init__()
         self.setWindowTitle(title)
         self.resize(1060, 850)
+        self._monitoring_paused = False
+
         self._video = VideoWidget()
         self._video.shoulder_point_clicked.connect(self._on_shoulder_point_clicked)
 
@@ -56,26 +58,28 @@ class MainWindow(QMainWindow):
         self._drop_spin.setValue(shoulder_drop_percent)
         self._drop_spin.valueChanged.connect(self.shoulder_drop_changed.emit)
 
+        self._pause_button = QPushButton("Pause monitoring")
+        self._pause_button.clicked.connect(self._on_pause_clicked)
         self._calibrate_button = QPushButton("Calibrate shoulders")
         self._calibrate_button.clicked.connect(self._on_calibrate_clicked)
         self._clear_button = QPushButton("Clear calibration")
         self._clear_button.clicked.connect(self.clear_reference_requested.emit)
-        self._test_alert_button = QPushButton("Test one long beep")
-        self._test_alert_button.clicked.connect(self.test_alert_requested.emit)
 
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Shoulder-drop gate:"))
         controls.addWidget(self._drop_spin)
         controls.addStretch(1)
-        controls.addWidget(self._test_alert_button)
+        controls.addWidget(self._pause_button)
         controls.addWidget(self._calibrate_button)
         controls.addWidget(self._clear_button)
 
         legend = QLabel(
             "HEAD AND FACE ARE COMPLETELY IGNORED. In each pose you mark 6 shoulder-line points: "
-            "3 on the LEFT shoulder from the neck outward, then 3 on the RIGHT shoulder in the same order. "
+            "3 on the LEFT shoulder from the inner visible shoulder area outward, then 3 on the RIGHT shoulder in the same order. "
             "Repeat for CENTER, a very small LEFT turn, and a very small RIGHT turn: 18 points total. "
-            "The same six shoulder anchors are tracked directly; no new face/background feature is added. "
+            "When turned, if the neck/shoulder junction is hidden, use the visible chin/shoulder contact as the first inner point. "
+            "A shirt collar is optional and is never required; use the visible shoulder contour/seam/fabric. "
+            "The same six shoulder anchors are followed by pyramidal optical flow and are reacquired from the calibrated views if tracking is lost. "
             "Green = calibrated CENTER anchors | Cyan = valid current anchors | Gray = temporarily lost anchor | Red = slouch."
         )
         legend.setWordWrap(True)
@@ -101,6 +105,10 @@ class MainWindow(QMainWindow):
         self._calibrate_button.setText("Please wait...")
         self.calibrate_requested.emit()
 
+    def _on_pause_clicked(self) -> None:
+        self._pause_button.setEnabled(False)
+        self.monitoring_pause_requested.emit(not self._monitoring_paused)
+
     def _on_shoulder_point_clicked(self, x: float, y: float) -> None:
         self.calibration_point_selected.emit(x, y)
 
@@ -121,20 +129,32 @@ class MainWindow(QMainWindow):
         calibration_current: int,
         calibration_target: int,
         calibration_message: str,
+        monitoring_paused: bool,
     ) -> None:
+        total_anchor_count = 0
+        if shoulders is not None:
+            total_anchor_count = len(shoulders.anchors)
+        elif reference_shoulders is not None:
+            total_anchor_count = len(reference_shoulders.anchors)
         valid_anchor_count = shoulders.valid_anchor_count if shoulders is not None else 0
-        self._diagnostics.setText(
-            f"TRACKER: {'OK' if tracker_ready else 'NO'}   "
-            f"SHOULDERS: {'OK' if shoulders_detected else 'NO'}   "
-            f"ANCHORS: {valid_anchor_count}/6   "
-            f"MATCH: {tracker_confidence:.2f}"
-        )
-        if shoulders_detected:
-            self._diagnostics.setStyleSheet("font-weight: bold; color: #16803a;")
-        elif tracker_ready:
+
+        if monitoring_paused:
+            self._diagnostics.setText("MONITORING: PAUSED — NO BEEP")
             self._diagnostics.setStyleSheet("font-weight: bold; color: #c07b00;")
         else:
-            self._diagnostics.setStyleSheet("font-weight: bold; color: #a22b2b;")
+            self._diagnostics.setText(
+                f"TRACKER: {'OK' if tracker_ready else 'NO'}   "
+                f"SHOULDERS: {'OK' if shoulders_detected else 'NO'}   "
+                f"ANCHORS: {valid_anchor_count}/{total_anchor_count or 6}   "
+                f"MATCH: {tracker_confidence:.2f}"
+            )
+            if shoulders_detected:
+                self._diagnostics.setStyleSheet("font-weight: bold; color: #16803a;")
+            elif tracker_ready:
+                self._diagnostics.setStyleSheet("font-weight: bold; color: #c07b00;")
+            else:
+                self._diagnostics.setStyleSheet("font-weight: bold; color: #a22b2b;")
+
         self._video.set_frame(
             frame,
             shoulders,
@@ -156,12 +176,25 @@ class MainWindow(QMainWindow):
     def set_status(self, text: str) -> None:
         self._status.setText(text)
 
+    def set_monitoring_paused(self, paused: bool) -> None:
+        self._monitoring_paused = bool(paused)
+        self._pause_button.setEnabled(True)
+        if paused:
+            self._pause_button.setText("Resume monitoring")
+            self._pause_button.setStyleSheet(
+                "font-weight: bold; background: #d59a00; color: black;"
+            )
+        else:
+            self._pause_button.setText("Pause monitoring")
+            self._pause_button.setStyleSheet("")
+
     def set_calibration_started(self, target: int) -> None:
         self._progress.setMaximum(max(1, target))
         self._progress.setValue(0)
         self._progress.setFormat(f"0/{target} — preparing CENTER")
         self._calibrate_button.setText("Preparing image...")
         self._calibrate_button.setEnabled(False)
+        self._pause_button.setEnabled(False)
         self._calibration_state.setText("CALIBRATING SHOULDERS")
         self._set_state_style("#d59a00", black_text=True)
         self._video.set_selection_enabled(False)
@@ -173,10 +206,10 @@ class MainWindow(QMainWindow):
         self._progress.setFormat(f"{current}/{target} — {message}")
         self._video.set_calibration_overlay(message)
 
-    def set_calibration_points_required(self, message: str) -> None:
-        self._calibrate_button.setText("Click the 6 requested shoulder points")
+    def set_calibration_points_required(self, message: str, points_per_pose: int) -> None:
+        self._calibrate_button.setText(f"Click the {points_per_pose} requested shoulder points")
         self._calibrate_button.setEnabled(False)
-        self._video.set_selection_enabled(True, 6)
+        self._video.set_selection_enabled(True, points_per_pose)
         self._video.set_calibration_overlay(message)
 
     def set_calibration_action_required(self, message: str) -> None:
@@ -194,10 +227,11 @@ class MainWindow(QMainWindow):
         self._progress.setFormat("18-point shoulder calibration complete")
         self._calibrate_button.setText("Recalibrate shoulders")
         self._calibrate_button.setEnabled(True)
+        self._pause_button.setEnabled(True)
         self._calibration_state.setText("CALIBRATED — SHOULDERS ONLY")
         self._set_state_style("#16803a")
         self._video.set_calibration_overlay(
-            "CALIBRATED\nReturn to your normal centered pose. The six shoulder anchors are tracked directly. If fewer than four anchors remain reliable, warning is paused instead of guessing."
+            "CALIBRATED\nReturn to your normal centered pose. The six shoulder anchors are followed frame-to-frame with pyramidal optical flow. Lost anchors are continuously reacquired from CENTER/LEFT/RIGHT calibration views."
         )
         QTimer.singleShot(3000, lambda: self._video.set_calibration_overlay(None))
 
@@ -206,6 +240,7 @@ class MainWindow(QMainWindow):
         self._progress.setFormat(f"Calibration problem — {message}")
         self._calibrate_button.setText("Restart calibration")
         self._calibrate_button.setEnabled(True)
+        self._pause_button.setEnabled(True)
         self._calibration_state.setText("CALIBRATION NEEDS ATTENTION")
         self._set_state_style("#9b2c2c")
         self._video.set_calibration_overlay(f"CALIBRATION PROBLEM\n{message}")
@@ -217,6 +252,7 @@ class MainWindow(QMainWindow):
         self._progress.setFormat("Calibration not started")
         self._calibrate_button.setText("Calibrate shoulders")
         self._calibrate_button.setEnabled(True)
+        self._pause_button.setEnabled(True)
         self._calibration_state.setText("NOT CALIBRATED")
         self._set_state_style("#9b2c2c")
         self._video.set_calibration_overlay("NOT CALIBRATED")

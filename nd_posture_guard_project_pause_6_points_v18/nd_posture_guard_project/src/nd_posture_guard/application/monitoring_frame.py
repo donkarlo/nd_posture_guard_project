@@ -25,3 +25,4 @@ class MonitoringFrame:
     calibration_current: int
     calibration_target: int
     calibration_message: str
+    monitoring_paused: bool

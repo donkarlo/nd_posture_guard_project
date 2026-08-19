@@ -151,22 +151,15 @@ class VideoWidget(QWidget):
         color = QColor(70, 220, 100)
         painter.save()
         painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
-        if len(self._reference_shoulders.anchors) == 6:
+        anchor_count = len(self._reference_shoulders.anchors)
+        if anchor_count >= 4 and anchor_count % 2 == 0:
+            side = anchor_count // 2
+            valid = (True,) * anchor_count
             self._draw_anchor_side(
-                painter,
-                draw_rect,
-                self._reference_shoulders.anchors[:3],
-                (True, True, True),
-                color,
-                6,
+                painter, draw_rect, self._reference_shoulders.anchors[:side], valid[:side], color, 6
             )
             self._draw_anchor_side(
-                painter,
-                draw_rect,
-                self._reference_shoulders.anchors[3:],
-                (True, True, True),
-                color,
-                6,
+                painter, draw_rect, self._reference_shoulders.anchors[side:], valid[side:], color, 6
             )
         else:
             left = self._to_widget(draw_rect, self._reference_shoulders.left)
@@ -182,10 +175,12 @@ class VideoWidget(QWidget):
         color = QColor(245, 70, 70) if self._posture_state == "slouch" else QColor(80, 220, 220)
         painter.save()
         painter.setPen(QPen(color, 3))
-        if len(self._shoulders.anchors) == 6:
-            valid = self._shoulders.valid_anchors or (True, True, True, True, True, True)
-            self._draw_anchor_side(painter, draw_rect, self._shoulders.anchors[:3], valid[:3], color, 7)
-            self._draw_anchor_side(painter, draw_rect, self._shoulders.anchors[3:], valid[3:], color, 7)
+        anchor_count = len(self._shoulders.anchors)
+        if anchor_count >= 4 and anchor_count % 2 == 0:
+            side = anchor_count // 2
+            valid = self._shoulders.valid_anchors or ((True,) * anchor_count)
+            self._draw_anchor_side(painter, draw_rect, self._shoulders.anchors[:side], valid[:side], color, 7)
+            self._draw_anchor_side(painter, draw_rect, self._shoulders.anchors[side:], valid[side:], color, 7)
         else:
             left = self._to_widget(draw_rect, self._shoulders.left)
             right = self._to_widget(draw_rect, self._shoulders.right)

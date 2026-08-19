@@ -21,7 +21,7 @@ class MonitoringController(QObject):
         self._window.calibration_point_selected.connect(self._worker.request_calibration_point)
         self._window.clear_reference_requested.connect(self._worker.request_clear_reference)
         self._window.shoulder_drop_changed.connect(self._worker.request_shoulder_drop_percent)
-        self._window.test_alert_requested.connect(self._test_alert)
+        self._window.monitoring_pause_requested.connect(self._worker.request_monitoring_paused)
         self._window.closing.connect(self.stop)
 
         self._worker.frame_ready.connect(self._show_frame)
@@ -35,6 +35,7 @@ class MonitoringController(QObject):
         self._worker.calibration_completed.connect(self._window.set_calibration_complete)
         self._worker.calibration_failed.connect(self._window.set_calibration_failed)
         self._worker.calibration_cleared.connect(self._window.set_calibration_cleared)
+        self._worker.monitoring_paused_changed.connect(self._window.set_monitoring_paused)
         self._worker.fatal_error.connect(self._show_fatal_error)
 
     def start(self) -> None:
@@ -67,21 +68,12 @@ class MonitoringController(QObject):
             result.calibration_current,
             result.calibration_target,
             result.calibration_message,
+            result.monitoring_paused,
         )
 
     @Slot()
     def _trigger_alert(self) -> None:
         self._alert_service.trigger()
-
-
-    @Slot()
-    def _test_alert(self) -> None:
-        if self._alert_service.test_alert():
-            self._window.set_status(
-                f"Single-beep alert test requested from: {self._alert_service.sound_path}"
-            )
-        else:
-            self._window.set_status("Alert beep file is not available.")
 
     @Slot(str)
     def _camera_started(self, device_label: str) -> None:

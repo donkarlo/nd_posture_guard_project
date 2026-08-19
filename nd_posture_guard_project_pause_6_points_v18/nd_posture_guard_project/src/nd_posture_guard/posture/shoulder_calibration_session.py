@@ -40,6 +40,10 @@ class ShoulderCalibrationSession:
         return len(self.STAGES) * self.POINTS_PER_POSE
 
     @property
+    def points_per_pose(self) -> int:
+        return self.POINTS_PER_POSE
+
+    @property
     def current_points(self) -> tuple[tuple[float, float], ...]:
         return tuple(self._points)
 
@@ -51,15 +55,26 @@ class ShoulderCalibrationSession:
     def next_point_message(self) -> str:
         index = len(self._points)
         stage = self.stage_name
-        prompts = (
-            "LEFT shoulder 1/3 — click the point next to the neck.",
-            "LEFT shoulder 2/3 — click the middle of the shoulder line.",
-            "LEFT shoulder 3/3 — click the outer shoulder tip.",
-            "RIGHT shoulder 1/3 — click the point next to the neck.",
-            "RIGHT shoulder 2/3 — click the middle of the shoulder line.",
-            "RIGHT shoulder 3/3 — click the outer shoulder tip.",
+        local = index % self.POINTS_PER_SHOULDER
+        side = "LEFT" if index < self.POINTS_PER_SHOULDER else "RIGHT"
+        descriptions = (
+            "inner visible shoulder point",
+            "middle shoulder point",
+            "outer shoulder tip",
         )
-        return f"{stage}: {prompts[min(index, len(prompts) - 1)]}"
+        extra = ""
+        if local == 0:
+            if stage == "CENTER":
+                extra = " Use the visible neck/shoulder junction when it is visible."
+            else:
+                extra = (
+                    " If the neck/shoulder junction is hidden by the turn, use the visible "
+                    "chin/shoulder contact or the nearest visible inner shoulder point."
+                )
+        return (
+            f"{stage}: {side} shoulder {local + 1}/3 — click the {descriptions[local]}."
+            f"{extra} Keep all three points on the visible top shoulder line and space them roughly evenly."
+        )
 
     @property
     def poses(self) -> tuple[ShoulderCalibrationPose, ...]:
@@ -103,18 +118,12 @@ class ShoulderCalibrationSession:
             self._points = candidate_points
             return None
 
-        left_points = tuple(candidate_points[:3])
-        right_points = tuple(candidate_points[3:6])
-        assert len(left_points) == 3 and len(right_points) == 3
-        pose = ShoulderCalibrationPose(
-            left_points=(left_points[0], left_points[1], left_points[2]),
-            right_points=(right_points[0], right_points[1], right_points[2]),
-        )
+        left_points = tuple(candidate_points[: self.POINTS_PER_SHOULDER])
+        right_points = tuple(candidate_points[self.POINTS_PER_SHOULDER :])
+        pose = ShoulderCalibrationPose(left_points=left_points, right_points=right_points)
         try:
             self._validate_pose(pose, frame_width, frame_height)
         except ValueError:
-            # Never leave six rejected clicks stuck in the session.
-            # The current stage can only restart from point 1/6.
             self._points = []
             raise
         self._poses.append(pose)
@@ -126,7 +135,7 @@ class ShoulderCalibrationSession:
 
     def build_reference(self) -> PostureReference:
         if not self.complete:
-            raise RuntimeError("Calibration needs CENTER, slight LEFT, and slight RIGHT six-point shoulder poses.")
+            raise RuntimeError("Calibration needs CENTER, slight LEFT, and slight RIGHT shoulder poses.")
         profiles = tuple(
             ShoulderCalibrationProfile.from_shoulders(
                 pose.shoulders,
@@ -155,18 +164,27 @@ class ShoulderCalibrationSession:
 
         left_x = [point[0] for point in pose.left_points]
         right_x = [point[0] for point in pose.right_points]
-        minimum_span = max(12.0, frame_width * 0.018)
-        if left_x[0] - left_x[2] < minimum_span:
+        minimum_span = max(20.0, frame_width * 0.03)
+        if left_x[0] - left_x[-1] < minimum_span:
             raise ValueError(
-                "On the LEFT shoulder, click from the neck outward: neck-side point, middle point, then outer tip."
+                "On the LEFT shoulder, click from the inner visible shoulder point outward to the shoulder tip."
             )
-        if right_x[2] - right_x[0] < minimum_span:
+        if right_x[-1] - right_x[0] < minimum_span:
             raise ValueError(
-                "On the RIGHT shoulder, click from the neck outward: neck-side point, middle point, then outer tip."
+                "On the RIGHT shoulder, click from the inner visible shoulder point outward to the shoulder tip."
             )
 
-        max_vertical_span = frame_height * 0.18
+        left_wrong = sum(1 for first, second in zip(left_x, left_x[1:]) if second >= first)
+        right_wrong = sum(1 for first, second in zip(right_x, right_x[1:]) if second <= first)
+        if left_wrong > 0:
+            raise ValueError("LEFT shoulder points must progress from the body outward.")
+        if right_wrong > 0:
+            raise ValueError("RIGHT shoulder points must progress from the body outward.")
+
+        max_vertical_span = frame_height * 0.22
         for points, name in ((pose.left_points, "LEFT"), (pose.right_points, "RIGHT")):
             ys = [point[1] for point in points]
             if max(ys) - min(ys) > max_vertical_span:
-                raise ValueError(f"The three {name} shoulder points are too far apart vertically. Please mark the shoulder line again.")
+                raise ValueError(
+                    f"The three {name} shoulder points are too far apart vertically. Mark the visible top shoulder line again."
+                )

@@ -34,22 +34,34 @@ class SettingsRepository:
             detection_interval_ms=int(vision.get("detection_interval_ms", 100)),
             shoulder_anchor_template_size_px=int(vision.get("shoulder_anchor_template_size_px", 25)),
             shoulder_anchor_search_radius_px=int(vision.get("shoulder_anchor_search_radius_px", 42)),
+            shoulder_anchor_recovery_search_radius_px=int(
+                vision.get("shoulder_anchor_recovery_search_radius_px", 190)
+            ),
             shoulder_anchor_minimum_match_confidence=float(
-                vision.get("shoulder_anchor_minimum_match_confidence", 0.45)
+                vision.get("shoulder_anchor_minimum_match_confidence", 0.42)
             ),
             shoulder_anchor_minimum_valid_anchors=int(
                 vision.get("shoulder_anchor_minimum_valid_anchors", 4)
             ),
             shoulder_anchor_maximum_group_motion_residual_px=float(
-                vision.get("shoulder_anchor_maximum_group_motion_residual_px", 16.0)
+                vision.get("shoulder_anchor_maximum_group_motion_residual_px", 22.0)
+            ),
+            shoulder_anchor_optical_flow_window_px=int(
+                vision.get("shoulder_anchor_optical_flow_window_px", 41)
+            ),
+            shoulder_anchor_optical_flow_pyramid_levels=int(
+                vision.get("shoulder_anchor_optical_flow_pyramid_levels", 4)
+            ),
+            shoulder_anchor_forward_backward_error_px=float(
+                vision.get("shoulder_anchor_forward_backward_error_px", 4.0)
             ),
             shoulder_drop_trigger_percent=float(monitoring.get("shoulder_drop_trigger_percent", 7.0)),
             shoulder_width_trigger_percent=float(monitoring.get("shoulder_width_trigger_percent", 12.0)),
             shoulder_tilt_trigger_degrees=float(monitoring.get("shoulder_tilt_trigger_degrees", 12.0)),
             required_bad_frames=int(monitoring.get("required_bad_frames", 5)),
             alert_cooldown_seconds=float(monitoring.get("alert_cooldown_seconds", 3.0)),
-            alert_sound_path=str(alerts.get("sound_path", "assets/saf_beshin.wav")),
-            alert_volume_percent=int(alerts.get("volume_percent", 120)),
+            alert_sound_path=str(alerts.get("sound_path", "assets/one_long_beep.wav")),
+            alert_volume_percent=int(alerts.get("volume_percent", 100)),
         )
 
     def save_shoulder_drop_trigger_percent(self, value: float) -> None:

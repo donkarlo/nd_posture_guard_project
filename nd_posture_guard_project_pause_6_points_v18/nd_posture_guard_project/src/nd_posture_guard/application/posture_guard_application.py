@@ -40,6 +40,10 @@ class PostureGuardApplication:
             minimum_match_confidence=settings.shoulder_anchor_minimum_match_confidence,
             minimum_valid_anchors=settings.shoulder_anchor_minimum_valid_anchors,
             maximum_group_motion_residual_px=settings.shoulder_anchor_maximum_group_motion_residual_px,
+            recovery_search_radius_px=settings.shoulder_anchor_recovery_search_radius_px,
+            optical_flow_window_px=settings.shoulder_anchor_optical_flow_window_px,
+            optical_flow_pyramid_levels=settings.shoulder_anchor_optical_flow_pyramid_levels,
+            optical_flow_forward_backward_error_px=settings.shoulder_anchor_forward_backward_error_px,
         )
 
         worker = MonitoringWorker(
