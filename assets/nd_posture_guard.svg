@@ -1,9 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect x="32" y="32" width="448" height="448" rx="104" fill="#17212b"/>
-  <circle cx="256" cy="146" r="54" fill="#f4f7f9"/>
-  <path d="M139 243 C173 210 213 198 256 198 C299 198 339 210 373 243" fill="none" stroke="#72d6a0" stroke-width="42" stroke-linecap="round"/>
-  <path d="M256 211 L256 371" fill="none" stroke="#f4f7f9" stroke-width="38" stroke-linecap="round"/>
-  <path d="M190 374 L256 320 L322 374" fill="none" stroke="#72d6a0" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="139" cy="243" r="20" fill="#72d6a0"/>
-  <circle cx="373" cy="243" r="20" fill="#72d6a0"/>
+  <rect x="28" y="28" width="456" height="456" rx="112" fill="#17212b"/>
+
+  <!-- Clearly human head and neck -->
+  <circle cx="256" cy="132" r="62" fill="#f4f7f9"/>
+  <rect x="232" y="184" width="48" height="54" rx="20" fill="#f4f7f9"/>
+
+  <!-- Rounded shoulders/torso: intentionally no long horizontal wing-like strokes -->
+  <path d="M168 250 Q205 214 256 214 Q307 214 344 250" fill="none" stroke="#f4f7f9" stroke-width="34" stroke-linecap="round"/>
+  <path d="M183 257 Q171 324 196 403" fill="none" stroke="#f4f7f9" stroke-width="34" stroke-linecap="round"/>
+  <path d="M329 257 Q341 324 316 403" fill="none" stroke="#f4f7f9" stroke-width="34" stroke-linecap="round"/>
+
+  <!-- Posture spine -->
+  <path d="M256 221 C248 267 250 318 256 376" fill="none" stroke="#72d6a0" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="256" cy="245" r="9" fill="#72d6a0"/>
+  <circle cx="253" cy="292" r="9" fill="#72d6a0"/>
+  <circle cx="254" cy="339" r="9" fill="#72d6a0"/>
+  <circle cx="256" cy="378" r="9" fill="#72d6a0"/>
+
+  <!-- Compact posture check mark -->
+  <circle cx="377" cy="363" r="58" fill="#17212b" stroke="#72d6a0" stroke-width="12"/>
+  <path d="M347 362 L369 384 L410 338" fill="none" stroke="#72d6a0" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

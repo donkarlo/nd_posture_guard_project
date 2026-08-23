@@ -1,31 +1,65 @@
 import numpy as np
 
 from nd_posture_guard.training.example_training_session import ExampleTrainingSession
-from nd_posture_guard.training.shoulder_roi_builder import ShoulderRoiBuilder
 
 
-def test_single_training_sample_collects_six_points_and_frames() -> None:
-    session = ExampleTrainingSession(ShoulderRoiBuilder(0.1, 0.55), 8)
+def _points():
+    return (
+        (270, 150), (330, 150), (300, 220),
+        (245, 280), (150, 300), (355, 280), (450, 300),
+    )
+
+
+def _swapped_mirrored_click_order():
+    return (
+        (330, 150), (270, 150), (300, 220),
+        (450, 300), (355, 280),
+        (150, 300), (245, 280),
+    )
+
+
+def test_single_training_sample_collects_three_shapes_and_frames() -> None:
+    session = ExampleTrainingSession(8)
     session.start(0)
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     session.begin_point_selection(frame)
-    points = ((300, 220), (220, 240), (120, 270), (340, 225), (420, 245), (520, 275))
-    for point in points:
-        session.add_point(point, 640, 480)
+    assert "SHAPE 1/3" in session.next_point_message
+    for index, point in enumerate(_points()):
+        assert session.add_point(point, 640, 480) is (index == 6)
+        if index == 2:
+            assert "SHAPE 2/3" in session.next_point_message
+        if index == 4:
+            assert "SHAPE 3/3" in session.next_point_message
     assert session.recording
+    assert session.geometry.is_plausible(640, 480)
     for index in range(8):
-        finished = session.add_observation(
-            np.full(16, index / 100.0, dtype=np.float32), frame
-        )
-    assert finished
+        finished = session.add_frame(frame)
+        assert finished is (index == 7)
     assert session.complete
-    assert session.features.shape == (8, 16)
     assert len(session.frames) == 8
     assert session.label == 0
 
 
-def test_session_supports_bad_label_without_direction_categories() -> None:
-    session = ExampleTrainingSession(ShoulderRoiBuilder(0.1, 0.55), 8)
+def test_mirrored_left_right_and_endpoint_order_are_canonicalized() -> None:
+    session = ExampleTrainingSession(8)
+    session.start(0)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    session.begin_point_selection(frame)
+
+    for index, point in enumerate(_swapped_mirrored_click_order()):
+        assert session.add_point(point, 640, 480) is (index == 6)
+
+    assert session.recording
+    assert session.current_points == _points()
+    assert session.geometry.points == _points()
+    assert session.geometry.is_plausible(640, 480)
+
+
+def test_session_supports_bad_label_and_explicit_image_side_messages() -> None:
+    session = ExampleTrainingSession(8)
     session.start(1)
     assert session.label_name == "BAD"
     assert session.waiting_for_frame
+    assert "SHAPE 1/3" in session.next_point_message
+    assert "FACE TRIANGLE" in session.next_point_message
+    assert "LEFT SIDE OF IMAGE / RIGHT SIDE OF IMAGE" in session.next_point_message

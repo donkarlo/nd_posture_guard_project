@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nd_posture_guard"
-version = "0.24.0"
-description = "Incremental personal shoulder-posture monitor with persistent training data, Ubuntu dock integration, and robust warning playback."
+version = "0.25.0"
+description = "Incremental personal seven-point face/shoulder geometry posture monitor with persistent training data and Ubuntu dock integration."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

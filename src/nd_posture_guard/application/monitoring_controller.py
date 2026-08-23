@@ -11,6 +11,8 @@ from nd_posture_guard.ui.main_window import MainWindow
 
 
 class MonitoringController(QObject):
+    """Wire the main window to the worker while keeping persistence and alert side effects explicit."""
+
     def __init__(
         self,
         window: MainWindow,
@@ -28,6 +30,7 @@ class MonitoringController(QObject):
         self._window.add_good_training_requested.connect(self._worker.request_add_good_training)
         self._window.add_bad_training_requested.connect(self._worker.request_add_bad_training)
         self._window.training_point_selected.connect(self._worker.request_training_point)
+        self._window.training_cancel_requested.connect(self._worker.request_cancel_training)
         self._window.bad_score_threshold_changed.connect(self._change_bad_score_threshold)
         self._window.monitoring_pause_requested.connect(self._worker.request_monitoring_paused)
         self._window.review_training_requested.connect(self._worker.request_training_samples)
@@ -45,14 +48,16 @@ class MonitoringController(QObject):
         self._worker.training_failed.connect(self._window.set_training_failed)
         self._worker.dataset_stats_changed.connect(self._window.set_dataset_stats)
         self._worker.monitoring_paused_changed.connect(self._window.set_monitoring_paused)
-        self._worker.training_samples_ready.connect(self._window.show_training_samples)
+        self._worker.training_samples_ready.connect(self._training_samples_ready)
         self._worker.fatal_error.connect(self._show_fatal_error)
 
     def start(self) -> None:
+        """Start the background monitoring worker."""
         self._worker.start()
 
     @Slot(float)
     def _change_bad_score_threshold(self, value: float) -> None:
+        """Persist a threshold change synchronously, then apply it to the worker."""
         try:
             self._settings_repository.save_bad_score_threshold(value)
         except Exception as exc:
@@ -62,6 +67,7 @@ class MonitoringController(QObject):
 
     @Slot()
     def stop(self) -> None:
+        """Request worker shutdown only once and wait briefly for camera release."""
         if self._stopping:
             return
         self._stopping = True
@@ -71,6 +77,7 @@ class MonitoringController(QObject):
 
     @Slot(object)
     def _show_frame(self, result: MonitoringFrame) -> None:
+        """Forward one throttled frame result to the main window."""
         self._window.show_frame(
             result.frame,
             result.posture_state,
@@ -78,8 +85,8 @@ class MonitoringController(QObject):
             result.confidence,
             result.warning_text,
             result.model_ready,
-            result.left_roi,
-            result.right_roi,
+            result.geometry_points,
+            result.tracking_confidence,
             result.training_active,
             result.training_stage_current,
             result.training_stage_total,
@@ -87,15 +94,26 @@ class MonitoringController(QObject):
             result.monitoring_paused,
         )
 
+    @Slot(object, bool)
+    def _training_samples_ready(self, samples, open_dialog: bool) -> None:
+        """Open review only for explicit requests; background refreshes never resurrect a closed dialog."""
+        if open_dialog:
+            self._window.show_training_samples(samples)
+        else:
+            self._window.refresh_training_samples(samples)
+
     @Slot()
     def _trigger_alert(self) -> None:
+        """Play the warning sound through the alert service cooldown."""
         self._alert_service.trigger()
 
     @Slot(str)
     def _camera_started(self, device_label: str) -> None:
+        """Report the selected physical camera device."""
         self._window.set_status(f"Camera active: {device_label}.")
 
     @Slot(str)
     def _show_fatal_error(self, message: str) -> None:
+        """Surface a fatal monitoring error in both status text and a modal dialog."""
         self._window.set_status(f"Monitoring stopped: {message}")
         QMessageBox.critical(self._window, "Monitoring error", message)

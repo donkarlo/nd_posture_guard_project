@@ -1,194 +1,140 @@
-# ND Posture Guard — v0.24.0
+# ND Posture Guard — v0.25.0
 
-ND Posture Guard is a personal Ubuntu webcam posture monitor. It learns from your own **GOOD** and **BAD** shoulder-posture recordings, stores the training dataset outside the application source tree, and produces one long warning beep when BAD posture remains above the configured beep threshold.
+ND Posture Guard is a personal Ubuntu webcam posture monitor. Version 0.25 replaces the old shoulder-texture model with a **seven-point geometry model** learned directly from your own GOOD and BAD examples.
 
+## What the model uses now
 
-## Ubuntu dock/taskbar icon
+Every new training sample is defined by exactly seven points, in this order:
 
-v0.24 adds a dedicated **ND Posture Guard** icon. This also works when the app is started directly from a terminal with:
+1. Center of the eye on the **left side of the displayed image**.
+2. Center of the eye on the **right side of the displayed image**.
+3. Lowest visible point of the chin.
+4. Left side of image: shoulder/neck junction.
+5. Left side of image: outer shoulder endpoint.
+6. Right side of image: shoulder/neck junction.
+7. Right side of image: outer shoulder endpoint.
 
-```bash
-python nd_posture_guard.py
-```
+The first three points form the **face triangle**. Points 4–5 form the **left shoulder line** and points 6–7 form the **right shoulder line**.
 
-At startup the application sets its Qt window icon and stable Linux desktop identity (`nd-posture-guard`). It also idempotently installs/updates these user-local desktop integration files:
+The wording “left/right side of the image” is deliberate because the camera preview is mirrored. It avoids confusing anatomical left/right with screen left/right.
+
+## Monitoring
+
+During normal monitoring the same seven landmarks are tracked automatically with OpenCV optical flow plus periodic template re-anchoring learned from your own clicked samples.
+
+The camera view displays the geometry **the program is actually using for its current decision**:
+
+- the current eye-eye-chin triangle;
+- the current left-image shoulder line;
+- the current right-image shoulder line;
+- the seven tracked landmark points;
+- tracking confidence;
+- GOOD/BAD state, BAD score and classification confidence.
+
+The geometry overlay is color-coded: green for a confidently GOOD state, red for BAD, and amber when tracking confidence is low. This is useful for checking whether an unexpected classification comes from the classifier or from an inaccurate landmark estimate.
+
+If tracking confidence becomes too low, the state becomes **TRACKING UNCERTAIN** and no warning beep is emitted from uncertain geometry.
+
+## How GOOD/BAD classification works
+
+The classifier does not use shirt texture as its primary signal. The seven coordinates are converted to a compact **28-dimensional geometric descriptor** containing normalized landmark positions, face proportions, chin displacement, shoulder vectors, shoulder tilt, and face-to-shoulder distances.
+
+Geometry is translated and scaled relative to the shoulders before classification, so ordinary whole-body movement in the image has less influence than actual changes in head/neck/shoulder posture.
+
+The classifier is personal and example-based. It uses your own GOOD and BAD samples in two complementary ways:
+
+1. **Nearest-example distance:** the current 28-D vector is robustly scaled and compared with the nearest few GOOD and BAD examples. If it is closer to BAD examples, the distance-based BAD score rises.
+2. **Learned GOOD→BAD posture axis:** the median GOOD geometry and median BAD geometry define a supervised direction in feature space. Dimensions with large within-class variance are down-weighted. The current posture is projected onto this axis and converted to a probability-like BAD score with a logistic function.
+
+The two scores are combined as:
 
 ```text
-~/.local/share/icons/hicolor/scalable/apps/nd-posture-guard.svg
-~/.local/share/applications/nd-posture-guard.desktop
+raw BAD score = 0.40 × distance score + 0.60 × projection score
 ```
 
-No root/sudo access is required. Ubuntu/GNOME can therefore distinguish the running posture monitor from generic Python/PySide applications in the dock. The desktop integration is cosmetic and never prevents the posture monitor from starting if the desktop files cannot be written.
+when the supervised projection is available. If it cannot be estimated reliably, only the distance score is used.
 
-## Important changes in v0.23
+To suppress single-frame jitter, the displayed BAD score is the median of the last five raw scores. A posture is displayed as BAD when this smoothed score is above `0.5`. The **Beep threshold** is separate: it controls when warning audio is allowed to start, and the threshold must remain exceeded for the configured number of consecutive frames.
 
-### 1. The arbitrary 62% default is removed
-
-The previous `62%` default did not have a principled meaning. The classifier's natural GOOD/BAD decision boundary is now:
+Classification confidence is based on distance from the neutral boundary:
 
 ```text
-50%
+confidence = 2 × |BAD score − 0.5|
 ```
 
-The main control is therefore named **Beep threshold**.
+clipped to the interval `[0, 1]`.
 
-- bad-score `<= 50%` → GOOD
-- bad-score `> 50%` → BAD
-- the adjustable Beep threshold decides when BAD evidence is strong enough to produce the warning sound
+For the exact equations and runtime pipeline, see [`docs/posture_guard_math.tex`](docs/posture_guard_math.tex).
 
-The default Beep threshold is `50%`. You can raise it if the monitor is too sensitive.
+## Existing six-point recordings
 
-Old v0.22 runtime files that contain exactly the old unschematized `62%` default are migrated once to `50%`. Other previously saved user values are preserved.
+Existing recordings are **not deleted or overwritten**.
 
-### 2. Threshold persistence is now direct and atomic
+Older six-shoulder-point samples remain visible in **Review / delete training videos** and can still be watched or manually deleted. They are marked as legacy and are not mixed into the new seven-point model because they do not contain eye/chin landmarks.
 
-Changing the Beep threshold no longer depends on the camera worker thread. The GUI/controller writes the value directly to:
+Therefore v0.25 needs at least one new seven-point GOOD sample and one new seven-point BAD sample before the new model becomes ready.
 
-```text
-/home/donkarlo/Dropbox/repo/data/nd_posture_guard_project/runtime/runtime_settings.yaml
-```
+## Review/delete fix
 
-The file is written atomically. The project `settings.yaml` is not rewritten, so installing a newer ZIP does not replace the user's runtime value.
+Deleting a training sample now removes it from the review list immediately. The worker then deletes the persistent sample and refreshes the list in place.
 
-When the window closes, the value currently visible in the spin box is committed again. This also covers the case where a number is typed and the application is closed immediately without pressing Enter or Tab.
+A background refresh never opens the review window. Closing the review window therefore cannot be followed by the old bug where a late delete/list callback unexpectedly opens it again.
 
-### 3. BAD detection is more sensitive to actual shoulder movement
+## Long-running performance changes
 
-The earlier classifier relied too heavily on normalized texture/HOG-like features. That could recognize the same shirt very well while failing to treat a substantial downward shoulder movement as BAD.
+The previous runtime repeatedly built large HOG/edge descriptors from shoulder image regions. Rebuilding the profile could also reopen and process every stored training frame.
 
-v0.23 rebuilds runtime descriptors from the already stored raw frames and six shoulder points. It adds strong fixed-camera spatial features:
+v0.25 removes those expensive paths from active monitoring:
 
-- a low-resolution vertical-edge map for each shoulder;
-- a row-by-row shoulder edge profile;
-- the existing HOG-like local appearance descriptor.
+- runtime posture feature: 28 geometry values instead of a large image descriptor;
+- optical flow tracks only seven points;
+- template matching is local and periodic rather than full-frame every cycle;
+- stored videos are no longer replayed to rebuild the classifier;
+- the worker no longer makes an extra full camera-frame copy for each UI signal;
+- UI camera-frame delivery is capped at **8 FPS during both monitoring and training**, preventing the Qt event queue from being flooded while point-selection/progress signals remain immediate.
 
-The spatial components receive substantially more weight than shirt texture. Since the shoulder ROIs stay fixed in camera coordinates, a shoulder moving downward or forward moves inside the feature map instead of being normalized away.
+Raw clips are still saved for review and future migration, but they are not continuously reprocessed.
 
-The classifier also learns a supervised GOOD→BAD posture direction from the user's examples. Dimensions that consistently separate GOOD from BAD receive more importance than irrelevant changing texture.
+## Persistent data
 
-No shoulder point is tracked during normal monitoring, so long-term anchor drift is not used.
-
-## Persistent data location
-
-All user training data is stored here:
+All user data stays outside the application source tree:
 
 ```text
 /home/donkarlo/Dropbox/repo/data/nd_posture_guard_project
 ```
 
-The application creates the directory automatically if it does not exist.
-
-Typical layout:
-
-```text
-/home/donkarlo/Dropbox/repo/data/nd_posture_guard_project/
-├── dataset_manifest.json
-├── runtime/
-│   └── runtime_settings.yaml
-└── samples/
-    ├── good/
-    │   └── <sample-id>/
-    │       ├── metadata.json
-    │       ├── anchor_frame.jpg
-    │       ├── clip.avi
-    │       ├── frames.npz
-    │       └── features.npy
-    └── bad/
-        └── <sample-id>/
-            └── ...
-```
-
-Replacing the application source or ZIP does not replace this dataset.
-
-## Existing v0.20–v0.22 training videos
-
-You do **not** need to retrain just because v0.23 uses a new runtime feature schema. The durable data is the saved raw video frames plus the six normalized shoulder points. On startup v0.23 rebuilds the new runtime feature representation from those files.
-
-Compatible examples are merged. Raw samples are never silently replaced.
-
-## Adding training data
-
-Use either:
-
-```text
-Add good training data
-Add bad training data
-```
-
-Each sample asks for exactly six shoulder points:
-
-1. Left shoulder — inner/neck-side visible point.
-2. Left shoulder — middle.
-3. Left shoulder — outer shoulder tip.
-4. Right shoulder — inner/neck-side visible point.
-5. Right shoulder — middle.
-6. Right shoulder — outer shoulder tip.
-
-Then hold the selected posture naturally for about three seconds while the application records frames.
-
-There are no separate CENTER/LEFT/RIGHT categories. If the real neck/shoulder junction is hidden during rotation, select the innermost visible part of the shoulder. A shirt collar is not required.
-
-## How to improve the personal model
-
-Use GOOD examples for postures that must not beep. Use BAD examples for postures that should beep.
-
-If a bad posture is missed, add another BAD example of that posture. If a normal posture is incorrectly rejected, add another GOOD example of that normal posture.
-
-The dataset is incremental: new compatible samples are appended and the runtime classifier is rebuilt from the complete dataset.
-
-## Review and delete training videos
-
-Press:
-
-```text
-Review / delete training videos
-```
-
-Saved samples are displayed newest first with their GOOD/BAD label. The selected clip loops in the review window. Use:
-
-```text
-Delete selected training sample
-```
-
-to remove one incorrect or unwanted recording. The model is rebuilt immediately from the remaining data.
+New samples are appended; old samples are never silently replaced.
 
 ## Pause / Resume
 
-Use:
+Use **Pause monitoring** when leaving the computer. Tracking geometry may remain visible, but no warning beep is generated while paused.
+
+## Beep threshold persistence
+
+The threshold remains saved atomically under:
 
 ```text
-Pause monitoring
-Resume monitoring
+/home/donkarlo/Dropbox/repo/data/nd_posture_guard_project/runtime/runtime_settings.yaml
 ```
 
-when leaving the computer. No warning beep is generated while monitoring is paused.
+The project `settings.yaml` is not rewritten by the threshold control.
 
-## Warning sound
+## Ubuntu dock/taskbar icon
 
-There are no Ubuntu desktop notifications. The warning is one long beep. Playback tries available Ubuntu audio backends in order:
-
-1. `paplay`
-2. `pw-play`
-3. `aplay`
-4. `ffplay`
+The application still installs its icon and `.desktop` identity in the user-local Ubuntu locations at startup. v0.25 replaces the previous ambiguous icon with an upright human/posture symbol containing the face triangle, spine and shoulder guides.
 
 ## Run
 
 ```bash
 cd /home/donkarlo/Dropbox/repo/nd_posture_guard_project
-python nd_posture_guard.py
+/home/donkarlo/phd-venv/bin/python nd_posture_guard.py
 ```
 
-The application supports the standard `opencv-python` 5 package and does not require `cv2.HOGDescriptor` or `opencv-contrib-python`.
+## Main implementation components
 
-## Test status
-
-The v0.23 package is tested for:
-
-- persistent threshold save/load and migration from the old 62% default;
-- preservation of project `settings.yaml` while runtime settings change;
-- fixed-camera spatial shoulder descriptors;
-- GOOD/BAD classifier separation;
-- reuse of old raw training recordings;
-- incremental dataset save/list/delete;
-- alert playback fallback behavior.
+- `PostureGeometry`: semantic seven-landmark value object.
+- `PostureGeometryFeatureExtractor`: compact normalized posture descriptor.
+- `PostureGeometryTracker`: optical-flow + learned-template tracking.
+- `ExamplePostureClassifier`: personal GOOD/BAD geometry classifier.
+- `TrainingDatasetRepository`: append-only storage, legacy preservation and fast model rebuild.
+- `ResponsiveMonitoringWorker`: keeps camera-frame delivery bounded during training so Qt does not accumulate an unbounded frame queue.

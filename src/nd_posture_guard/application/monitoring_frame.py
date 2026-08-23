@@ -8,6 +8,8 @@ from numpy.typing import NDArray
 
 @dataclass(slots=True)
 class MonitoringFrame:
+    """One UI update containing the camera image, classification and tracked geometry."""
+
     frame: NDArray[np.uint8]
     posture_state: str
     bad_score: float
@@ -15,8 +17,8 @@ class MonitoringFrame:
     nearest_distance: float
     warning_text: str | None
     model_ready: bool
-    left_roi: tuple[int, int, int, int] | None
-    right_roi: tuple[int, int, int, int] | None
+    geometry_points: tuple[tuple[float, float], ...] | None
+    tracking_confidence: float
     training_active: bool
     training_stage_current: int
     training_stage_total: int

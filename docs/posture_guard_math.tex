@@ -1,0 +1,301 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Mathematical and Algorithmic Description of ND Posture Guard}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+ND Posture Guard is a personalized, example-based posture classifier. It does
+not assume that one fixed geometric posture is correct for every person. The
+user supplies examples of two classes,
+\[
+y \in \{0,1\}, \qquad 0=\mathrm{GOOD},\;1=\mathrm{BAD},
+\]
+and the program learns how the user's own head--neck--shoulder geometry differs
+between those classes.
+
+\section{Seven-landmark representation}
+
+One posture sample is described by seven image points
+\[
+P=(p_1,\ldots,p_7), \qquad p_i=(x_i,y_i)\in\mathbb{R}^2,
+\]
+with the semantic order
+\begin{align*}
+p_1 &: \text{eye center on the left side of the displayed image},\\
+p_2 &: \text{eye center on the right side of the displayed image},\\
+p_3 &: \text{lowest visible chin point},\\
+p_4 &: \text{left-image neck/shoulder junction},\\
+p_5 &: \text{left-image outer shoulder endpoint},\\
+p_6 &: \text{right-image neck/shoulder junction},\\
+p_7 &: \text{right-image outer shoulder endpoint}.
+\end{align*}
+
+The first three points define the face triangle. Points $(p_4,p_5)$ define the
+left shoulder segment and $(p_6,p_7)$ the right shoulder segment. During
+monitoring, these are the same three shapes drawn on the live image, so the
+visual overlay shows the geometry actually used by the classifier.
+
+\section{Geometric plausibility}
+
+Training and tracked geometries are rejected when their screen-space ordering is
+physically implausible. Examples include an eye order reversal after
+canonicalization, a chin above the eyes, shoulder endpoints pointing inward, an
+unrealistically short shoulder span, or points too far outside the image. These
+checks are not the classifier itself; they are data-quality constraints that
+keep malformed annotations from entering the model.
+
+\section{Translation and scale normalization}
+
+Let the two inner shoulder points be $p_4$ and $p_6$. The reference center is
+\[
+c_s = \frac{p_4+p_6}{2}.
+\]
+Let the outer-shoulder span be
+\[
+s = \lVert p_7-p_5\rVert_2.
+\]
+The implementation lower-bounds $s$ by both $0.10$ of the image width and by
+$1$ pixel to avoid division by zero or excessive amplification.
+
+Each raw point becomes
+\[
+\tilde p_i = \frac{p_i-c_s}{s}, \qquad i=1,\ldots,7.
+\]
+This gives $14$ normalized coordinate values. Translation of the whole body in
+the image is largely removed by subtracting $c_s$, and global image scale is
+largely removed by dividing by the shoulder span $s$.
+
+\section{The 28-dimensional posture feature}
+
+Define the eye midpoint
+\[
+e_m=\frac{p_1+p_2}{2}.
+\]
+The implementation additionally uses four two-dimensional normalized vectors:
+\begin{align*}
+v_e &= \frac{p_2-p_1}{s}, &
+ v_c &= \frac{p_3-e_m}{s},\\
+v_L &= \frac{p_5-p_4}{s}, &
+ v_R &= \frac{p_7-p_6}{s}.
+\end{align*}
+These contribute $8$ more numbers.
+
+Six scalar descriptors are then added:
+\begin{align*}
+w_e &= \frac{\lVert p_2-p_1\rVert_2}{s},\\
+h_f &= \frac{\lVert p_3-e_m\rVert_2}{s},\\
+t_o &= \frac{y_7-y_5}{s},\\
+t_i &= \frac{y_6-y_4}{s},\\
+d_e &= \frac{c_{s,y}-e_{m,y}}{s},\\
+d_c &= \frac{c_{s,y}-y_3}{s}.
+\end{align*}
+Thus
+\[
+x\in\mathbb{R}^{28}
+\]
+contains $14+8+6=28$ geometry values.
+
+\section{Robust feature scaling}
+
+Different feature dimensions can have different natural magnitudes. Before
+distance calculations, each dimension is robustly standardized. For training
+feature matrix $X$, the per-dimension center is
+\[
+m_j=\operatorname{median}_i X_{ij}.
+\]
+The median absolute deviation is
+\[
+\operatorname{MAD}_j=
+\operatorname{median}_i\left|X_{ij}-m_j\right|.
+\]
+The robust scale is
+\[
+a_j=\max\left(1.4826\,\operatorname{MAD}_j,\;0.012\right).
+\]
+A feature is transformed as
+\[
+z_j=\frac{x_j-m_j}{a_j}.
+\]
+The $0.012$ floor prevents nearly constant dimensions from exploding because of
+very small numerical differences.
+
+\section{Nearest-example class distance}
+
+For the scaled runtime vector $z$, Euclidean distances to all scaled training
+examples $z_i$ are
+\[
+r_i=\lVert z-z_i\rVert_2.
+\]
+For each class, the classifier averages only the nearest few examples. If $k$
+is the configured neighbor count, the implementation uses at most three:
+\[
+k_c=\min(k,N_c,3).
+\]
+Let $D_G$ be the mean of the $k_G$ nearest GOOD distances and $D_B$ the mean of
+the $k_B$ nearest BAD distances.
+
+The distance-based BAD score is
+\[
+s_D=
+\frac{D_G^2}{D_G^2+D_B^2}.
+\]
+Therefore $s_D\rightarrow 0$ when the current vector is much closer to GOOD and
+$s_D\rightarrow 1$ when it is much closer to BAD. If both distances are
+numerically zero, the score is defined as $0.5$.
+
+\section{Supervised GOOD-to-BAD posture axis}
+
+The classifier also learns an explicit direction from the GOOD cloud toward the
+BAD cloud. Let $G$ and $B$ be the scaled GOOD and BAD samples. Their robust
+centers are coordinate-wise medians
+\[
+\mu_G=\operatorname{median}(G),\qquad
+\mu_B=\operatorname{median}(B).
+\]
+The raw separation is
+\[
+\Delta=\mu_B-\mu_G.
+\]
+
+Dimensions that fluctuate strongly inside the classes should matter less. Let
+\[
+v=\frac{1}{2}\left(\operatorname{Var}(G)+\operatorname{Var}(B)\right)
+\]
+be the pooled per-dimension variance. A variance floor $v_0$ is estimated from
+the positive pooled variances and is never allowed below $0.08$. The
+variance-normalized direction is
+\[
+d' = \frac{\Delta}{\sqrt{v+v_0}},
+\qquad
+ d=\frac{d'}{\lVert d'\rVert_2}.
+\]
+The sign is chosen so that BAD examples project above GOOD examples.
+
+For scalar projections
+\[
+q_i=z_i^\top d,
+\]
+the class medians are
+\[
+q_G=\operatorname{median}_{i\in G}q_i,
+\qquad
+q_B=\operatorname{median}_{i\in B}q_i,
+\]
+and the midpoint decision boundary is
+\[
+b=\frac{q_G+q_B}{2}.
+\]
+The projection scale used by the code is
+\[
+\tau=\max\left(0.24(q_B-q_G),\;1.5\eta,\;0.12\right),
+\]
+where $\eta$ is the 75th percentile of the absolute residual projections around
+the two class medians.
+
+For a runtime vector $z$, its projection score is obtained with a logistic
+function
+\[
+s_P=\sigma\left(\frac{z^\top d-b}{\tau}\right),
+\qquad
+\sigma(u)=\frac{1}{1+e^{-u}}.
+\]
+The implementation clips the logistic argument to $[-12,12]$ for numerical
+stability.
+
+\section{Combining the two classifiers}
+
+When the supervised axis is available, the raw BAD score is
+\[
+s_{\mathrm{raw}}=0.40s_D+0.60s_P.
+\]
+If the axis cannot be estimated reliably, the classifier falls back to
+\[
+s_{\mathrm{raw}}=s_D.
+\]
+This combination prevents the learned direction from completely overriding the
+actual nearest labeled examples while still giving the learned GOOD-to-BAD axis
+more weight.
+
+\section{Temporal smoothing and confidence}
+
+The last five raw scores are stored and the runtime BAD score is their median:
+\[
+s_t=\operatorname{median}
+\left(s_{\mathrm{raw},t-4},\ldots,s_{\mathrm{raw},t}\right).
+\]
+This reduces one-frame noise.
+
+The displayed posture class uses the natural midpoint
+\[
+s_t>0.5 \Rightarrow \mathrm{BAD},
+\qquad
+s_t\le 0.5 \Rightarrow \mathrm{GOOD}.
+\]
+Classification confidence is
+\[
+C=\operatorname{clip}\left(2|s_t-0.5|,0,1\right).
+\]
+Thus a score near $0.5$ has low confidence, whereas a score near $0$ or $1$ has
+high confidence.
+
+\section{Alert threshold and hysteresis}
+
+The displayed GOOD/BAD boundary and the sound threshold are intentionally
+separate. Let $T$ be the user-selected beep threshold. A frame counts as an
+alerting frame only when
+\[
+s_t>T.
+\]
+The alarm is emitted only after this remains true for the configured number of
+consecutive frames. This prevents a brief threshold crossing from generating an
+immediate beep.
+
+\section{Tracking in live monitoring}
+
+Once a GOOD/BAD model is ready, the seven image landmarks are initialized from
+training templates and followed through the live stream using pyramidal Lucas--
+Kanade optical flow. Local template matching is used to recover failed points
+and periodically re-anchor them to reduce drift.
+
+The monitoring window draws the exact current estimate used by classification:
+\begin{itemize}[leftmargin=2em]
+    \item the eye--eye--chin triangle,
+    \item the left-image shoulder segment,
+    \item the right-image shoulder segment,
+    \item the seven corresponding points.
+\end{itemize}
+The overlay color reflects the current state and tracking reliability.
+
+\section{Why camera-frame UI throttling matters}
+
+The camera worker and the Qt GUI run on different threads. Each displayed camera
+frame requires conversion from BGR to RGB and a copied \texttt{QImage}. If the
+worker emits frames faster than the GUI can consume them, queued Qt events can
+accumulate faster than they are processed. Training has separate immediate
+signals for selected points, progress, status, and save completion, so camera
+images themselves do not need to be delivered at the full capture rate.
+
+The responsive worker therefore bounds camera-image delivery to at most 8 FPS
+both during normal monitoring and while training. This keeps the GUI event queue
+bounded without delaying point-selection or training-progress feedback.
+
+\section{Interpretation and limitations}
+
+The model is best interpreted as a personalized 2D geometry similarity model. It
+captures features such as head displacement relative to the shoulders, chin
+drop, shoulder asymmetry, and changes in head/neck/shoulder configuration. It is
+not a 3D biomechanical reconstruction and is not a medical diagnostic system.
+Its quality depends on representative GOOD/BAD samples, stable camera placement,
+lighting, and reliable landmark tracking.
+
+\end{document}
