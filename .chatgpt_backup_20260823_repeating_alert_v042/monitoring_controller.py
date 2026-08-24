@@ -39,6 +39,7 @@ class MonitoringController(QObject):
 
         self._worker.frame_ready.connect(self._show_frame)
         self._worker.status_changed.connect(self._window.set_status)
+        self._worker.alert_requested.connect(self._trigger_alert)
         self._worker.camera_started.connect(self._camera_started)
         self._worker.training_started.connect(self._window.set_training_started)
         self._worker.training_points_required.connect(self._window.set_training_points_required)
@@ -51,10 +52,12 @@ class MonitoringController(QObject):
         self._worker.fatal_error.connect(self._show_fatal_error)
 
     def start(self) -> None:
+        """Start the background monitoring worker."""
         self._worker.start()
 
     @Slot(float)
     def _change_bad_score_threshold(self, value: float) -> None:
+        """Persist a threshold change synchronously, then apply it to the worker."""
         try:
             self._settings_repository.save_bad_score_threshold(value)
         except Exception as exc:
@@ -64,26 +67,17 @@ class MonitoringController(QObject):
 
     @Slot()
     def stop(self) -> None:
+        """Request worker shutdown only once and wait briefly for camera release."""
         if self._stopping:
             return
         self._stopping = True
-        self._alert_service.stop()
         self._worker.request_stop()
         if self._worker.isRunning():
             self._worker.wait(3000)
 
     @Slot(object)
     def _show_frame(self, result: MonitoringFrame) -> None:
-        # warning_text appears only after the classifier's required consecutive
-        # BAD-frame condition has been satisfied. Keep repeated audio active for
-        # exactly as long as that condition remains true.
-        alert_active = (
-            result.warning_text is not None
-            and not result.training_active
-            and not result.monitoring_paused
-        )
-        self._alert_service.set_active(alert_active)
-
+        """Forward one throttled frame result to the main window."""
         self._window.show_frame(
             result.frame,
             result.posture_state,
@@ -102,17 +96,24 @@ class MonitoringController(QObject):
 
     @Slot(object, bool)
     def _training_samples_ready(self, samples, open_dialog: bool) -> None:
+        """Open review only for explicit requests; background refreshes never resurrect a closed dialog."""
         if open_dialog:
             self._window.show_training_samples(samples)
         else:
             self._window.refresh_training_samples(samples)
 
+    @Slot()
+    def _trigger_alert(self) -> None:
+        """Play the warning sound through the alert service cooldown."""
+        self._alert_service.trigger()
+
     @Slot(str)
     def _camera_started(self, device_label: str) -> None:
+        """Report the selected physical camera device."""
         self._window.set_status(f"Camera active: {device_label}.")
 
     @Slot(str)
     def _show_fatal_error(self, message: str) -> None:
-        self._alert_service.set_active(False)
+        """Surface a fatal monitoring error in both status text and a modal dialog."""
         self._window.set_status(f"Monitoring stopped: {message}")
         QMessageBox.critical(self._window, "Monitoring error", message)

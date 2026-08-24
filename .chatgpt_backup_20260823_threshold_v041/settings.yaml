@@ -28,9 +28,8 @@ training:
   novelty_multiplier: 4.5
 
 monitoring:
-  # 10% is the default sensitivity for both the displayed GOOD/BAD state and beep trigger.
-  # The GUI allows 5%-95% and persists the chosen value under data/runtime/.
-  bad_score_threshold: 0.10
+  # 50% is the natural GOOD/BAD boundary. Higher = fewer beeps. The GUI value persists under data/runtime/.
+  bad_score_threshold: 0.50
   k_neighbors: 3
   required_bad_frames: 5
   alert_cooldown_seconds: 3.0

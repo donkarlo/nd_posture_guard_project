@@ -55,13 +55,6 @@ class IsolatedMonitoringWorker(StableMonitoringWorker):
         self._training_message = ""
         self._monitoring_paused = self._paused_before_training
         self._geometry_tracker.reset()
-
-        # Never classify with a stale model after a new sample was accepted.
-        # Invalidate any in-flight profile build and keep alerts disabled until
-        # the newly persisted sample is included in a fresh profile.
-        self._profile_reload_generation += 1
-        self._classifier.clear()
-
         if label == 0:
             self._pending_good += 1
         else:
@@ -74,11 +67,10 @@ class IsolatedMonitoringWorker(StableMonitoringWorker):
             label_name,
             predicted_good,
             predicted_bad,
-            False,
+            self._classifier.ready,
         )
         self.status_changed.emit(
-            f"{label_name} sample accepted. Saving and recalibrating in background; "
-            "alerts stay disabled until the new profile is ready."
+            f"{label_name} sample accepted. Saving in background; camera monitoring remains live."
         )
         self._save_jobs.put((label, label_name, points, anchor, frames, feature))
 

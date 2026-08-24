@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nd_posture_guard"
-version = "0.26.0"
-description = "Personal posture monitor using fresh MediaPipe face/shoulder landmarks on every frame."
+version = "0.25.0"
+description = "Incremental personal seven-point face/shoulder geometry posture monitor with persistent training data and Ubuntu dock integration."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -13,7 +13,6 @@ dependencies = [
     "opencv-python>=5.0.0.93,<6",
     "PyYAML>=6.0,<7",
     "numpy>=1.26,<3",
-    "mediapipe>=0.10.35,<1",
 ]
 
 [project.scripts]

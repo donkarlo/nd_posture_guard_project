@@ -10,12 +10,8 @@ from nd_posture_guard.training.posture_training_profile import PostureTrainingPr
 
 
 class ExamplePostureClassifier:
-    DECISION_BOUNDARY = 0.50
-
     def __init__(self, bad_score_threshold: float, required_bad_frames: int, k_neighbors: int) -> None:
-        # UI/settings value is an alert margin ABOVE the intrinsic 50% GOOD/BAD boundary.
-        # Example: 0.10 means BAD at >= 0.50, audible alert at >= 0.60.
-        self._alert_margin = float(bad_score_threshold)
+        self._bad_score_threshold = float(bad_score_threshold)
         self._required_bad_frames = max(1, int(required_bad_frames))
         self._k_neighbors = max(1, int(k_neighbors))
         self._profile: PostureTrainingProfile | None = None
@@ -60,9 +56,7 @@ class ExamplePostureClassifier:
         self._score_history.clear()
 
     def set_bad_score_threshold(self, value: float) -> None:
-        # Kept under the old method name for controller/settings compatibility.
-        # The value is now an alert margin, not the GOOD/BAD decision boundary.
-        self._alert_margin = float(value)
+        self._bad_score_threshold = float(value)
         self._bad_frames = 0
         self._score_history.clear()
 
@@ -90,25 +84,26 @@ class ExamplePostureClassifier:
         self._score_history.append(float(raw_score))
         bad_score = float(np.median(np.asarray(self._score_history, dtype=np.float32)))
 
-        posture_bad = bad_score >= self.DECISION_BOUNDARY
-        confidence = self._decision_confidence(bad_score)
-
-        margin = float(np.clip(self._alert_margin, 0.0, 0.45))
-        alert_boundary = min(0.95, self.DECISION_BOUNDARY + margin)
-        alert_candidate = bad_score >= alert_boundary
-        self._bad_frames = self._bad_frames + 1 if alert_candidate else 0
+        threshold = float(np.clip(self._bad_score_threshold, 0.05, 0.95))
+        posture_bad = bad_score >= threshold
+        confidence = self._threshold_confidence(bad_score, threshold)
+        self._bad_frames = self._bad_frames + 1 if posture_bad else 0
 
         return PostureClassification(
             state="bad" if posture_bad else "good",
             bad_score=bad_score,
             confidence=confidence,
             nearest_distance=nearest_distance,
-            should_alert=alert_candidate and self._bad_frames >= self._required_bad_frames,
+            should_alert=posture_bad and self._bad_frames >= self._required_bad_frames,
         )
 
-    @classmethod
-    def _decision_confidence(cls, bad_score: float) -> float:
-        return float(np.clip(abs(float(bad_score) - cls.DECISION_BOUNDARY) * 2.0, 0.0, 1.0))
+    @staticmethod
+    def _threshold_confidence(bad_score: float, threshold: float) -> float:
+        if bad_score >= threshold:
+            value = (bad_score - threshold) / max(1.0 - threshold, 1e-6)
+        else:
+            value = (threshold - bad_score) / max(threshold, 1e-6)
+        return float(np.clip(value, 0.0, 1.0))
 
     @staticmethod
     def _robust_scaling(features: NDArray[np.float32]) -> tuple[NDArray[np.float32], NDArray[np.float32]]:

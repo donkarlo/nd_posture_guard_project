@@ -4,12 +4,7 @@ from nd_posture_guard.ui.main_window import MainWindow
 
 
 class IsolatedMainWindow(MainWindow):
-    def __init__(self, title: str, bad_score_threshold: float, data_root: str) -> None:
-        super().__init__(title, bad_score_threshold, data_root)
-        self._threshold_spin.blockSignals(True)
-        self._threshold_spin.setRange(5.0, 95.0)
-        self._threshold_spin.setValue(float(bad_score_threshold) * 100.0)
-        self._threshold_spin.blockSignals(False)
+    """Describe accepted training samples accurately while persistence is asynchronous."""
 
     def set_training_sample_saved(
         self, label_name: str, good: int, bad: int, model_ready: bool

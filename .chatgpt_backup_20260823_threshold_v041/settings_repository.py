@@ -11,8 +11,8 @@ from nd_posture_guard.config.app_settings import AppSettings
 
 
 class SettingsRepository:
-    DEFAULT_BAD_SCORE_THRESHOLD = 0.10
-    RUNTIME_SCHEMA_VERSION = 3
+    DEFAULT_BAD_SCORE_THRESHOLD = 0.50
+    RUNTIME_SCHEMA_VERSION = 2
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -63,6 +63,11 @@ class SettingsRepository:
         )
 
     def save_bad_score_threshold(self, value: float) -> None:
+        """Persist the GUI threshold atomically outside the application tree.
+
+        The project settings file is intentionally not rewritten. A new ZIP can be
+        unpacked over the application without replacing the user's runtime choice.
+        """
         value = self._validated_threshold(value, self.DEFAULT_BAD_SCORE_THRESHOLD)
         raw = self._read_raw()
         data_root = Path(
@@ -80,22 +85,27 @@ class SettingsRepository:
         persistent_path = self._persistent_path(data_root)
         if not persistent_path.exists():
             return project_default
+
         try:
             persistent = self._read_yaml_mapping(persistent_path)
         except (OSError, ValueError, yaml.YAMLError):
             return project_default
+
         persistent_monitoring = persistent.get("monitoring", {})
         if not isinstance(persistent_monitoring, dict):
             return project_default
+
         threshold = self._validated_threshold(
             persistent_monitoring.get("bad_score_threshold", project_default),
             project_default,
         )
+
+        # v0.22 shipped 0.62 as an arbitrary default. Old runtime files had no
+        # schema marker, so an untouched 0.62 is migrated once to the mathematically
+        # meaningful 0.50 GOOD/BAD boundary. Any other old user value is preserved.
         schema = int(persistent.get("runtime_schema_version", 0) or 0)
-        if schema < self.RUNTIME_SCHEMA_VERSION and (
-            abs(threshold - 0.50) < 1e-9 or abs(threshold - 0.62) < 1e-9
-        ):
-            threshold = project_default
+        if schema < self.RUNTIME_SCHEMA_VERSION and abs(threshold - 0.62) < 1e-9:
+            threshold = self.DEFAULT_BAD_SCORE_THRESHOLD
             try:
                 self.save_bad_score_threshold(threshold)
             except OSError:
@@ -125,7 +135,7 @@ class SettingsRepository:
             numeric = float(value)
         except (TypeError, ValueError):
             return float(fallback)
-        if not 0.05 <= numeric <= 0.95:
+        if not 0.50 <= numeric <= 0.95:
             return float(fallback)
         return numeric
 

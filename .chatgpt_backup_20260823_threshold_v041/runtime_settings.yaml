@@ -1,0 +1,4 @@
+runtime_schema_version: 2
+monitoring:
+  bad_score_threshold: 0.5
+updated_at_utc: '2026-08-23T19:58:30.129079+00:00'
