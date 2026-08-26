@@ -74,11 +74,11 @@ class MonitoringController(QObject):
 
     @Slot(object)
     def _show_frame(self, result: MonitoringFrame) -> None:
-        # warning_text appears only after the classifier's required consecutive
-        # BAD-frame condition has been satisfied. Keep repeated audio active for
-        # exactly as long as that condition remains true.
+        # Audio follows the same BAD state that drives the red UI. There is no
+        # second, stricter alert threshold: if posture is BAD, the warning sound
+        # becomes active immediately and repeats at the configured cooldown.
         alert_active = (
-            result.warning_text is not None
+            result.posture_state == "bad"
             and not result.training_active
             and not result.monitoring_paused
         )

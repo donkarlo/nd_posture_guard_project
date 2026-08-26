@@ -10,21 +10,24 @@ import wave
 
 
 class AlertSoundPlayer:
-    """Play a gentle two-beep warning asynchronously with audio fallbacks."""
+    """Play a soft modern two-note warning asynchronously with audio fallbacks."""
 
     SAMPLE_RATE = 44100
-    BEEP_FREQUENCY_HZ = 740.0
-    BEEP_SECONDS = 0.085
-    GAP_SECONDS = 0.070
-    FADE_SECONDS = 0.012
-    AMPLITUDE = 0.14
+    NOTE_FREQUENCIES_HZ = (659.25, 783.99)
+    NOTE_SECONDS = 0.130
+    GAP_SECONDS = 0.060
+    ATTACK_SECONDS = 0.010
+    RELEASE_SECONDS = 0.055
+    AMPLITUDE = 0.18
+    SECOND_HARMONIC_MIX = 0.10
+    THIRD_HARMONIC_MIX = 0.025
 
     def __init__(self, sound_path: Path, volume_percent: int) -> None:
         self._fallback_sound_path = sound_path
         self._volume_percent = max(0, min(int(volume_percent), 150))
         self._lock = Lock()
         self._playing = False
-        self._sound_path = self._prepare_double_beep()
+        self._sound_path = self._prepare_modern_double_chime()
 
     @property
     def sound_path(self) -> Path:
@@ -44,42 +47,58 @@ class AlertSoundPlayer:
         ).start()
         return True
 
-    def _prepare_double_beep(self) -> Path:
-        cache_path = Path.home() / ".cache" / "nd_posture_guard" / "double_soft_beep.wav"
+    def _prepare_modern_double_chime(self) -> Path:
+        cache_path = (
+            Path.home()
+            / ".cache"
+            / "nd_posture_guard"
+            / "modern_double_chime_v1.wav"
+        )
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             if cache_path.is_file() and cache_path.stat().st_size > 1000:
                 return cache_path
-            self._write_double_beep(cache_path)
+            self._write_modern_double_chime(cache_path)
             return cache_path
         except OSError:
             return self._fallback_sound_path
 
-    def _write_double_beep(self, path: Path) -> None:
-        beep_frames = max(1, round(self.SAMPLE_RATE * self.BEEP_SECONDS))
+    def _write_modern_double_chime(self, path: Path) -> None:
+        note_frames = max(1, round(self.SAMPLE_RATE * self.NOTE_SECONDS))
         gap_frames = max(1, round(self.SAMPLE_RATE * self.GAP_SECONDS))
-        fade_frames = max(1, round(self.SAMPLE_RATE * self.FADE_SECONDS))
+        attack_frames = max(1, round(self.SAMPLE_RATE * self.ATTACK_SECONDS))
+        release_frames = max(1, round(self.SAMPLE_RATE * self.RELEASE_SECONDS))
+        harmonic_normalizer = (
+            1.0 + self.SECOND_HARMONIC_MIX + self.THIRD_HARMONIC_MIX
+        )
         samples: list[int] = []
 
-        for beep_index in range(2):
-            for frame_index in range(beep_frames):
-                envelope = 1.0
-                if frame_index < fade_frames:
-                    envelope = frame_index / fade_frames
-                elif frame_index >= beep_frames - fade_frames:
-                    envelope = (beep_frames - 1 - frame_index) / fade_frames
-                envelope = max(0.0, min(1.0, envelope))
-                phase = (
-                    2.0
-                    * math.pi
-                    * self.BEEP_FREQUENCY_HZ
-                    * frame_index
-                    / self.SAMPLE_RATE
+        for note_index, frequency_hz in enumerate(self.NOTE_FREQUENCIES_HZ):
+            for frame_index in range(note_frames):
+                attack_position = min(1.0, frame_index / attack_frames)
+                release_position = min(
+                    1.0,
+                    max(0, note_frames - 1 - frame_index) / release_frames,
                 )
-                value = self.AMPLITUDE * envelope * math.sin(phase)
+                attack_envelope = math.sin(
+                    0.5 * math.pi * attack_position
+                ) ** 2
+                release_envelope = math.sin(
+                    0.5 * math.pi * release_position
+                ) ** 2
+                envelope = attack_envelope * release_envelope
+
+                time_seconds = frame_index / self.SAMPLE_RATE
+                phase = 2.0 * math.pi * frequency_hz * time_seconds
+                tone = (
+                    math.sin(phase)
+                    + self.SECOND_HARMONIC_MIX * math.sin(2.0 * phase)
+                    + self.THIRD_HARMONIC_MIX * math.sin(3.0 * phase)
+                ) / harmonic_normalizer
+                value = self.AMPLITUDE * envelope * tone
                 samples.append(int(max(-1.0, min(1.0, value)) * 32767))
 
-            if beep_index == 0:
+            if note_index == 0:
                 samples.extend([0] * gap_frames)
 
         temporary = path.with_suffix(".part")
