@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "image_name": "good.png",
+  "source_name": "",
+  "canvas_width": 1464,
+  "canvas_height": 1075,
+  "drawing_data_base64": "",
+  "background_image_base64": "",
+  "web_strokes": [],
+  "pencil": {
+    "width": 6.0,
+    "color": "#202020"
+  }
+}
