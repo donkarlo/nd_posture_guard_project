@@ -2,9 +2,9 @@
 
 ND Posture Guard is a personal Ubuntu webcam posture monitor. Version 0.25 replaces the old shoulder-texture model with a **seven-point geometry model** learned directly from your own GOOD and BAD examples.
 ** Good **
-<img src="good.png" alt="Description" width="800">
+<img src="assets/good.png" alt="Description" width="800">
 ** Bad **
-<img src="bad.png" alt="Description" width="800">
+<img src="assets/bad.png" alt="Description" width="800">
 
 ## What the model uses now
 
